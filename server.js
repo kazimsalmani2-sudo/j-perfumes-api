@@ -56,6 +56,11 @@ app.get('/', (req, res) => {
   res.send('Welcome to J Perfumewala API!');
 });
 
+// API Base URL
+app.get('/api', (req, res) => {
+  res.json({ message: 'Welcome to J Perfumewala API Endpoint!' });
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'J Perfumewala Backend is running' });
