@@ -46,10 +46,10 @@ app.use(cors());
 app.use(express.json());
 
 // Auth routes
-app.use('/api/auth', authRoutes);
+app.use('/auth', authRoutes);
 
 // Upload routes
-app.use('/api/upload', uploadRoutes);
+app.use('/upload', uploadRoutes);
 
 // Root URL
 app.get('/', (req, res) => {
@@ -57,7 +57,7 @@ app.get('/', (req, res) => {
 });
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'J Perfumewala Backend is running' });
 });
 
@@ -66,7 +66,7 @@ app.get('/api/health', (req, res) => {
 // ============================================================
 
 // Create Razorpay order
-app.post('/api/payment/create-order', async (req, res) => {
+app.post('/payment/create-order', async (req, res) => {
   try {
     const { amount, currency = 'INR', receipt } = req.body;
 
@@ -122,7 +122,7 @@ app.post('/api/payment/create-order', async (req, res) => {
 });
 
 // Verify Razorpay payment signature
-app.post('/api/payment/verify', (req, res) => {
+app.post('/payment/verify', (req, res) => {
   try {
     const {
       razorpay_order_id,
@@ -163,7 +163,7 @@ app.post('/api/payment/verify', (req, res) => {
 });
 
 // COD order confirmation
-app.post('/api/payment/cod-confirm', (req, res) => {
+app.post('/payment/cod-confirm', (req, res) => {
   try {
     const { orderId, total, deliveryDetails } = req.body;
 
@@ -195,7 +195,7 @@ app.post('/api/payment/cod-confirm', (req, res) => {
 const otpStore = new Map();
 
 // Send OTP
-app.post('/api/otp/send', async (req, res) => {
+app.post('/otp/send', async (req, res) => {
   try {
     const { email, phone } = req.body;
     const identifier = email || phone;
@@ -280,7 +280,7 @@ app.post('/api/otp/send', async (req, res) => {
 });
 
 // Verify OTP
-app.post('/api/otp/verify', (req, res) => {
+app.post('/otp/verify', (req, res) => {
   try {
     const { email, phone, otp } = req.body;
     const identifier = email || phone;
@@ -589,7 +589,7 @@ function getProgrammaticResponse(messages) {
 }
 
 // Chat endpoint
-app.post('/api/chat', async (req, res) => {
+app.post('/chat', async (req, res) => {
   try {
     const { messages } = req.body;
 
