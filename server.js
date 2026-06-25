@@ -51,6 +51,11 @@ app.use('/api/auth', authRoutes);
 // Upload routes
 app.use('/api/upload', uploadRoutes);
 
+// Root URL
+app.get('/', (req, res) => {
+  res.send('Welcome to J Perfumewala API!');
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'J Perfumewala Backend is running' });
