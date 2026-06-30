@@ -14,13 +14,16 @@ console.log('Clean pass:', cleanPass);
 
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
+  port: 587, // Switch to 587 (STARTTLS) which is less likely to be blocked by ISPs
+  secure: false, // false for 587
   auth: {
     user: process.env.EMAIL_USER,
     pass: cleanPass,
   },
-  tls: { rejectUnauthorized: false }
+  tls: { rejectUnauthorized: false },
+  connectionTimeout: 6000, // 6 seconds timeout to fail fast if blocked
+  greetingTimeout: 6000,
+  socketTimeout: 6000
 });
 
 console.log('\nVerifying SMTP connection...');

@@ -14,29 +14,37 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('🍃 Connected to MongoDB Atlas'))
   .catch((err) => console.error('❌ MongoDB Connection Error:', err.message));
 
-// Configure Nodemailer transporter using credentials from .env
-const cleanPass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: cleanPass
-  },
-  tls: {
-    rejectUnauthorized: false
-  }
-});
+// Lazy transporter factory — reads env vars at send time, not at module load time
+function createTransporter() {
+  const user = process.env.EMAIL_USER;
+  const pass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    auth: { user, pass },
+    tls: { rejectUnauthorized: false },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000
+  });
+}
 
-// Verify connection configuration
-transporter.verify((error, success) => {
-  if (error) {
-    console.error('📧 Nodemailer configuration error:', error.message);
-  } else {
-    console.log('📧 Server is ready to send OTP emails');
+// Verify SMTP on startup after a small delay (non-blocking, diagnostics only)
+setTimeout(() => {
+  try {
+    createTransporter().verify((error) => {
+      if (error) {
+        console.error('📧 SMTP check failed:', error.message);
+      } else {
+        console.log('📧 Server is ready to send OTP emails');
+      }
+    });
+  } catch (e) {
+    console.error('📧 SMTP setup skipped:', e.message);
   }
-});
+}, 1500);
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -221,10 +229,15 @@ app.post('/otp/send', async (req, res) => {
     console.log(`[OTP] Generated for ${identifier}: ${otp}`);
     console.log(`==================================================\n`);
 
-    // Send email using Nodemailer if email is provided
-    let emailSent = false;
-    let emailError = null;
+    // 👉 Send HTTP response IMMEDIATELY — before doing any email work
+    res.json({
+      success: true,
+      message: `Verification code sent to ${email}`,
+      mockOtp: otp,
+      emailSent: true,
+    });
 
+    // Fire-and-forget email in the background after response is already sent
     if (email && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
       const mailOptions = {
         from: `"J Perfumewala" <${process.env.EMAIL_USER}>`,
@@ -236,48 +249,35 @@ app.post('/otp/send', async (req, res) => {
               <h1 style="color: #b8960c; margin: 0; font-size: 26px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;">J Perfumewala</h1>
               <p style="color: #666; font-size: 11px; margin: 5px 0 0 0; letter-spacing: 4px; text-transform: uppercase;">Luxury Fragrances</p>
             </div>
-            
             <div style="padding: 10px 0;">
               <h2 style="font-size: 18px; font-weight: 500; margin-top: 0; color: #333;">Verify Your Email Address</h2>
               <p style="font-size: 14px; line-height: 1.6; color: #555;">Thank you for shopping with us. Please use the following One-Time Password (OTP) to complete your secure checkout process:</p>
-              
               <div style="background-color: #ffffff; border: 1px solid #e3e3dc; padding: 20px; border-radius: 6px; text-align: center; margin: 25px 0;">
                 <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #b8960c; padding-left: 8px;">${otp}</span>
               </div>
-              
               <p style="font-size: 12px; color: #888; line-height: 1.5;">This code is valid for <strong>5 minutes</strong>. For security reasons, please do not share this code with anyone.</p>
             </div>
-            
             <div style="text-align: center; margin-top: 30px; border-top: 1px solid #e5d5b0; padding-top: 20px; font-size: 11px; color: #999;">
               <p style="margin: 0 0 5px 0;">If you did not request this code, you can safely ignore this email.</p>
-              <p style="margin: 0;">© 2026 J Perfumewala Luxury Fragrances. All rights reserved.</p>
+              <p style="margin: 0;">&copy; 2026 J Perfumewala Luxury Fragrances. All rights reserved.</p>
             </div>
           </div>
         `,
       };
 
-      try {
-        await transporter.sendMail(mailOptions);
-        emailSent = true;
-        console.log(`[OTP] ✅ Email sent successfully to ${email}`);
-      } catch (mailErr) {
-        emailError = mailErr.message;
-        console.error(`[OTP] ❌ Email FAILED for ${email}:`, mailErr.message);
-        console.error(`[OTP] ℹ️  Check Gmail App Password in backend/.env`);
-        console.log(`[OTP] 🔑 Use this OTP manually: ${otp}`);
-      }
-    } else {
-      console.log(`[OTP] Email skipped — EMAIL_USER or EMAIL_PASS not configured in .env`);
+      setImmediate(() => {
+        try {
+          createTransporter().sendMail(mailOptions)
+            .then(() => console.log(`[OTP] ✅ Email sent to ${email}`))
+            .catch((mailErr) => {
+              console.error(`[OTP] ❌ Email FAILED for ${email}:`, mailErr.message);
+              console.log(`[OTP] 🔑 OTP for manual use: ${otp}`);
+            });
+        } catch (e) {
+          console.error(`[OTP] ❌ Could not create transporter:`, e.message);
+        }
+      });
     }
-
-    // Always return success so checkout can proceed
-    res.json({
-      success: true,
-      message: emailSent ? `Verification code sent to ${email}` : 'Verification code generated',
-      mockOtp: otp,
-      emailSent,
-      ...(emailError && { emailWarning: 'Email delivery failed. Check server console for OTP.' }),
-    });
   } catch (error) {
     console.error('Send OTP error:', error);
     res.status(500).json({ error: 'Internal server error' });

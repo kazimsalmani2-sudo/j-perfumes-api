@@ -4,32 +4,45 @@ dotenv.config();
 import nodemailer from 'nodemailer';
 import { getOtpEmailTemplate } from '../utils/emailTemplate.js';
 
-// Clean the app password by removing all spaces (critical for Gmail App Passwords copy-pasted)
-const rawPass = process.env.EMAIL_PASS || '';
-const cleanPass = rawPass.replace(/\s+/g, '');
+/**
+ * Creates a fresh transporter reading env vars at call time.
+ * This avoids ESM module load-order issues where env vars aren't set yet.
+ */
+function createTransporter() {
+  const user = process.env.EMAIL_USER;
+  const pass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true, // Use SSL/TLS
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: cleanPass,
-  },
-  tls: {
-    // Prevent failure in local/test networks with self-signed certs
-    rejectUnauthorized: false
+  if (!user || !pass) {
+    throw new Error(`EMAIL credentials not found in .env (EMAIL_USER=${user}, EMAIL_PASS length=${pass.length})`);
   }
-});
 
-// Verify connection on startup to check for auth/network issues
-transporter.verify((error, success) => {
-  if (error) {
-    console.error('❌ SMTP Connection Error (Check EMAIL_USER & EMAIL_PASS):', error.message);
-  } else {
-    console.log('✅ SMTP Mailer is ready to send OTP emails');
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    auth: { user, pass },
+    tls: { rejectUnauthorized: false },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
+  });
+}
+
+// Verify on startup (non-blocking, only for diagnostics)
+setTimeout(() => {
+  try {
+    const t = createTransporter();
+    t.verify((error) => {
+      if (error) {
+        console.error('❌ SMTP Connection Error (Check EMAIL_USER & EMAIL_PASS):', error.message);
+      } else {
+        console.log('✅ SMTP Mailer is ready to send OTP emails');
+      }
+    });
+  } catch (e) {
+    console.error('❌ SMTP setup skipped:', e.message);
   }
-});
+}, 2000);
 
 /**
  * Sends a registration OTP email to the user
@@ -41,6 +54,8 @@ transporter.verify((error, success) => {
 export const sendOtpEmail = async (email, name, otp) => {
   if (!email) throw new Error('Recipient email is required.');
   if (!otp) throw new Error('OTP code is required.');
+
+  const transporter = createTransporter();
 
   const mailOptions = {
     from: `"J Perfumewala" <${process.env.EMAIL_USER}>`,

@@ -84,18 +84,10 @@ export const signup = async (req, res) => {
       mockOtpDb.set(email.toLowerCase(), { otp, createdAt: new Date() });
     }
 
-    // Send OTP via Nodemailer email service
-    try {
-      await sendOtpEmail(email, name, otp);
-    } catch (mailError) {
-      console.error('Mail sending error inside controller:', mailError.message);
-      return res.status(201).json({ 
-        success: true, 
-        message: 'Account created but failed to send verification email. Please try resending OTP.',
-        warning: 'Email delivery failed. Check server console for OTP.',
-        mockOtp: otp // Send OTP in response for easier testing/development
-      });
-    }
+    // Send OTP via Nodemailer email service in the background (non-blocking)
+    sendOtpEmail(email, name, otp).catch(mailError => {
+      console.error('Background mail sending error in signup:', mailError.message);
+    });
 
     return res.status(201).json({
       success: true,
@@ -227,16 +219,10 @@ export const resendOtp = async (req, res) => {
       mockOtpDb.set(email.toLowerCase(), { otp, createdAt: new Date() });
     }
 
-    // Send Email
-    try {
-      await sendOtpEmail(email, user.name, otp);
-    } catch (mailError) {
-      return res.status(200).json({ 
-        success: true, 
-        message: 'New verification OTP generated (email delivery failed).',
-        mockOtp: otp // Send OTP in response for easier testing/development
-      });
-    }
+    // Send Email in the background (non-blocking)
+    sendOtpEmail(email, user.name, otp).catch(mailError => {
+      console.error('Background mail sending error in resendOtp:', mailError.message);
+    });
 
     return res.status(200).json({
       success: true,
