@@ -201,6 +201,55 @@ app.post('/payment/cod-confirm', (req, res) => {
 });
 
 // ============================================================
+// CONTACT FORM — sends real email to business inbox
+// ============================================================
+app.post('/contact', async (req, res) => {
+  try {
+    const { name, email, subject, message } = req.body;
+
+    if (!name || !email || !subject || !message) {
+      return res.status(400).json({ success: false, error: 'All fields are required.' });
+    }
+
+    console.log(`[Contact] New message from ${name} <${email}> — "${subject}"`);
+
+    const mailOptions = {
+      from: `"J Perfumewala Contact" <${process.env.EMAIL_USER}>`,
+      to: process.env.EMAIL_USER, // Sends to your own Gmail
+      replyTo: email,             // Reply goes back to the customer
+      subject: `[J Perfumewala] ${subject}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e5d5b0; border-radius: 8px;">
+          <h2 style="color: #b8960c; border-bottom: 2px solid #e5d5b0; padding-bottom: 12px;">New Contact Form Message</h2>
+          <table style="width:100%; border-collapse:collapse; font-size:14px;">
+            <tr><td style="padding:8px 0; color:#888; width:80px;"><strong>From:</strong></td><td>${name}</td></tr>
+            <tr><td style="padding:8px 0; color:#888;"><strong>Email:</strong></td><td><a href="mailto:${email}">${email}</a></td></tr>
+            <tr><td style="padding:8px 0; color:#888;"><strong>Subject:</strong></td><td>${subject}</td></tr>
+          </table>
+          <div style="margin-top:20px; padding:20px; background:#fafaf7; border-left:4px solid #b8960c; border-radius:4px;">
+            <p style="margin:0; white-space:pre-wrap; color:#333; font-size:14px; line-height:1.6;">${message}</p>
+          </div>
+          <p style="margin-top:20px; font-size:12px; color:#999;">Sent via J Perfumewala Contact Form on ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</p>
+        </div>
+      `,
+    };
+
+    try {
+      await createTransporter().sendMail(mailOptions);
+      console.log(`[Contact] ✅ Email sent successfully from ${email}`);
+      return res.json({ success: true, message: 'Your message has been sent! We will reply shortly.' });
+    } catch (mailErr) {
+      console.error('[Contact] ❌ Email send failed:', mailErr.message);
+      return res.status(500).json({ success: false, error: 'Failed to send email. Please try again.' });
+    }
+
+  } catch (error) {
+    console.error('Contact route error:', error);
+    res.status(500).json({ success: false, error: 'Internal server error.' });
+  }
+});
+
+// ============================================================
 // OTP VERIFICATION ROUTES
 // ============================================================
 
@@ -211,6 +260,10 @@ const otpStore = new Map();
 app.post('/otp/send', async (req, res) => {
   try {
     const { email, phone } = req.body;
+
+    // Debug log — shows exactly what the frontend sent
+    console.log(`[OTP] /otp/send called — email="${email}", phone="${phone}"`);
+
     const identifier = email || phone;
     if (!identifier) {
       return res.status(400).json({ error: 'Email or phone number is required' });
@@ -229,15 +282,9 @@ app.post('/otp/send', async (req, res) => {
     console.log(`[OTP] Generated for ${identifier}: ${otp}`);
     console.log(`==================================================\n`);
 
-    // 👉 Send HTTP response IMMEDIATELY — before doing any email work
-    res.json({
-      success: true,
-      message: `Verification code sent to ${email}`,
-      mockOtp: otp,
-      emailSent: true,
-    });
+    let emailSent = false;
 
-    // Fire-and-forget email in the background after response is already sent
+    // Try to send email synchronously so we know if it succeeded
     if (email && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
       const mailOptions = {
         from: `"J Perfumewala" <${process.env.EMAIL_USER}>`,
@@ -265,19 +312,27 @@ app.post('/otp/send', async (req, res) => {
         `,
       };
 
-      setImmediate(() => {
-        try {
-          createTransporter().sendMail(mailOptions)
-            .then(() => console.log(`[OTP] ✅ Email sent to ${email}`))
-            .catch((mailErr) => {
-              console.error(`[OTP] ❌ Email FAILED for ${email}:`, mailErr.message);
-              console.log(`[OTP] 🔑 OTP for manual use: ${otp}`);
-            });
-        } catch (e) {
-          console.error(`[OTP] ❌ Could not create transporter:`, e.message);
-        }
-      });
+      try {
+        await createTransporter().sendMail(mailOptions);
+        console.log(`[OTP] ✅ Email sent to ${email}`);
+        emailSent = true;
+      } catch (mailErr) {
+        console.error(`[OTP] ❌ Email FAILED for ${email}:`, mailErr.message);
+      }
+    } else {
+      console.warn(`[OTP] ⚠️  Email NOT sent — email="${email}", EMAIL_USER set=${!!process.env.EMAIL_USER}, EMAIL_PASS set=${!!process.env.EMAIL_PASS}`);
     }
+
+    // Always return the OTP in response so frontend can show it as fallback
+    res.json({
+      success: true,
+      message: emailSent
+        ? `Verification code sent to ${email}. Please also check your spam folder.`
+        : `Verification code generated. Check backend terminal or use code below.`,
+      emailSent,
+      // Always include OTP so the UI can show it if email fails
+      otp,
+    });
   } catch (error) {
     console.error('Send OTP error:', error);
     res.status(500).json({ error: 'Internal server error' });
