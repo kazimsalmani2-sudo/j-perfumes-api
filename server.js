@@ -323,15 +323,20 @@ app.post('/otp/send', async (req, res) => {
       console.warn(`[OTP] ⚠️  Email NOT sent — email="${email}", EMAIL_USER set=${!!process.env.EMAIL_USER}, EMAIL_PASS set=${!!process.env.EMAIL_PASS}`);
     }
 
-    // Always return the OTP in response so frontend can show it as fallback
+    // If email failed, return an error — NEVER expose the OTP in the response
+    if (!emailSent) {
+      return res.status(503).json({
+        success: false,
+        emailSent: false,
+        error: 'Failed to send verification email. Please check your email address and try again.',
+      });
+    }
+
+    // Email sent successfully — do NOT include otp in response
     res.json({
       success: true,
-      message: emailSent
-        ? `Verification code sent to ${email}. Please also check your spam folder.`
-        : `Verification code generated. Check backend terminal or use code below.`,
-      emailSent,
-      // Always include OTP so the UI can show it if email fails
-      otp,
+      emailSent: true,
+      message: `Verification code sent to ${email}. Please also check your spam folder.`,
     });
   } catch (error) {
     console.error('Send OTP error:', error);
