@@ -4,7 +4,6 @@ dotenv.config();
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import nodemailer from 'nodemailer';
 import mongoose from 'mongoose';
 import authRoutes from './routes/authRoutes.js';
 import uploadRoutes from './routes/uploadRoutes.js';
@@ -14,36 +13,40 @@ mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('🍃 Connected to MongoDB Atlas'))
   .catch((err) => console.error('❌ MongoDB Connection Error:', err.message));
 
-// Lazy transporter factory — reads env vars at send time, not at module load time
-function createTransporter() {
-  const user = process.env.EMAIL_USER;
-  const pass = (process.env.EMAIL_PASS || '').replace(/\s+/g, '');
-  return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false,
-    auth: { user, pass },
-    tls: { rejectUnauthorized: false },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000
-  });
-}
-
-// Verify SMTP on startup after a small delay (non-blocking, diagnostics only)
-setTimeout(() => {
-  try {
-    createTransporter().verify((error) => {
-      if (error) {
-        console.error('📧 SMTP check failed:', error.message);
-      } else {
-        console.log('📧 Server is ready to send OTP emails');
-      }
-    });
-  } catch (e) {
-    console.error('📧 SMTP setup skipped:', e.message);
+// ============================================================
+// BREVO EMAIL HELPER — uses Brevo REST API (no SDK needed)
+// ============================================================
+async function sendBrevoEmail({ to, subject, html }) {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) {
+    throw new Error('BREVO_API_KEY is not configured in environment variables.');
   }
-}, 1500);
+
+  const senderEmail = process.env.BREVO_SENDER_EMAIL || process.env.EMAIL_USER;
+  const senderName  = process.env.BREVO_SENDER_NAME  || 'J Perfumewala';
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'accept':       'application/json',
+      'api-key':      apiKey,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      sender:  { name: senderName, email: senderEmail },
+      to:      [{ email: to }],
+      subject,
+      htmlContent: html,
+    }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text();
+    throw new Error(`Brevo API error ${response.status}: ${errBody}`);
+  }
+
+  return await response.json();
+}
 
 
 const app = express();
@@ -201,7 +204,7 @@ app.post('/payment/cod-confirm', (req, res) => {
 });
 
 // ============================================================
-// CONTACT FORM — sends real email to business inbox
+// CONTACT FORM — sends real email to business inbox via Brevo
 // ============================================================
 app.post('/contact', async (req, res) => {
   try {
@@ -213,33 +216,31 @@ app.post('/contact', async (req, res) => {
 
     console.log(`[Contact] New message from ${name} <${email}> — "${subject}"`);
 
-    const mailOptions = {
-      from: `"J Perfumewala Contact" <${process.env.EMAIL_USER}>`,
-      to: process.env.EMAIL_USER, // Sends to your own Gmail
-      replyTo: email,             // Reply goes back to the customer
-      subject: `[J Perfumewala] ${subject}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e5d5b0; border-radius: 8px;">
-          <h2 style="color: #b8960c; border-bottom: 2px solid #e5d5b0; padding-bottom: 12px;">New Contact Form Message</h2>
-          <table style="width:100%; border-collapse:collapse; font-size:14px;">
-            <tr><td style="padding:8px 0; color:#888; width:80px;"><strong>From:</strong></td><td>${name}</td></tr>
-            <tr><td style="padding:8px 0; color:#888;"><strong>Email:</strong></td><td><a href="mailto:${email}">${email}</a></td></tr>
-            <tr><td style="padding:8px 0; color:#888;"><strong>Subject:</strong></td><td>${subject}</td></tr>
-          </table>
-          <div style="margin-top:20px; padding:20px; background:#fafaf7; border-left:4px solid #b8960c; border-radius:4px;">
-            <p style="margin:0; white-space:pre-wrap; color:#333; font-size:14px; line-height:1.6;">${message}</p>
-          </div>
-          <p style="margin-top:20px; font-size:12px; color:#999;">Sent via J Perfumewala Contact Form on ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</p>
-        </div>
-      `,
-    };
+    const inboxEmail = process.env.BREVO_INBOX_EMAIL || process.env.EMAIL_USER;
 
     try {
-      await createTransporter().sendMail(mailOptions);
-      console.log(`[Contact] ✅ Email sent successfully from ${email}`);
+      await sendBrevoEmail({
+        to: inboxEmail,
+        subject: `[J Perfumewala] ${subject}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 30px; border: 1px solid #e5d5b0; border-radius: 8px;">
+            <h2 style="color: #b8960c; border-bottom: 2px solid #e5d5b0; padding-bottom: 12px;">New Contact Form Message</h2>
+            <table style="width:100%; border-collapse:collapse; font-size:14px;">
+              <tr><td style="padding:8px 0; color:#888; width:80px;"><strong>From:</strong></td><td>${name}</td></tr>
+              <tr><td style="padding:8px 0; color:#888;"><strong>Email:</strong></td><td><a href="mailto:${email}">${email}</a></td></tr>
+              <tr><td style="padding:8px 0; color:#888;"><strong>Subject:</strong></td><td>${subject}</td></tr>
+            </table>
+            <div style="margin-top:20px; padding:20px; background:#fafaf7; border-left:4px solid #b8960c; border-radius:4px;">
+              <p style="margin:0; white-space:pre-wrap; color:#333; font-size:14px; line-height:1.6;">${message}</p>
+            </div>
+            <p style="margin-top:20px; font-size:12px; color:#999;">Sent via J Perfumewala Contact Form on ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</p>
+          </div>
+        `,
+      });
+      console.log(`[Contact] ✅ Email sent via Brevo from ${email}`);
       return res.json({ success: true, message: 'Your message has been sent! We will reply shortly.' });
     } catch (mailErr) {
-      console.error('[Contact] ❌ Email send failed:', mailErr.message);
+      console.error('[Contact] ❌ Brevo send failed:', mailErr.message);
       return res.status(500).json({ success: false, error: 'Failed to send email. Please try again.' });
     }
 
@@ -284,46 +285,43 @@ app.post('/otp/send', async (req, res) => {
 
     let emailSent = false;
 
-    // Try to send email synchronously so we know if it succeeded
-    if (email && process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-      const mailOptions = {
-        from: `"J Perfumewala" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: `${otp} is your J Perfumewala verification code`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 30px; border: 1px solid #e5d5b0; border-radius: 8px; background-color: #fafaf7; color: #1a1a1a;">
-            <div style="text-align: center; margin-bottom: 25px; border-bottom: 2px solid #e5d5b0; padding-bottom: 20px;">
-              <h1 style="color: #b8960c; margin: 0; font-size: 26px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;">J Perfumewala</h1>
-              <p style="color: #666; font-size: 11px; margin: 5px 0 0 0; letter-spacing: 4px; text-transform: uppercase;">Luxury Fragrances</p>
-            </div>
-            <div style="padding: 10px 0;">
-              <h2 style="font-size: 18px; font-weight: 500; margin-top: 0; color: #333;">Verify Your Email Address</h2>
-              <p style="font-size: 14px; line-height: 1.6; color: #555;">Thank you for shopping with us. Please use the following One-Time Password (OTP) to complete your secure checkout process:</p>
-              <div style="background-color: #ffffff; border: 1px solid #e3e3dc; padding: 20px; border-radius: 6px; text-align: center; margin: 25px 0;">
-                <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #b8960c; padding-left: 8px;">${otp}</span>
-              </div>
-              <p style="font-size: 12px; color: #888; line-height: 1.5;">This code is valid for <strong>5 minutes</strong>. For security reasons, please do not share this code with anyone.</p>
-            </div>
-            <div style="text-align: center; margin-top: 30px; border-top: 1px solid #e5d5b0; padding-top: 20px; font-size: 11px; color: #999;">
-              <p style="margin: 0 0 5px 0;">If you did not request this code, you can safely ignore this email.</p>
-              <p style="margin: 0;">&copy; 2026 J Perfumewala Luxury Fragrances. All rights reserved.</p>
-            </div>
-          </div>
-        `,
-      };
-
+    // Send OTP via Brevo
+    if (email && process.env.BREVO_API_KEY) {
       try {
-        await createTransporter().sendMail(mailOptions);
-        console.log(`[OTP] ✅ Email sent to ${email}`);
+        await sendBrevoEmail({
+          to: email,
+          subject: `${otp} is your J Perfumewala verification code`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 30px; border: 1px solid #e5d5b0; border-radius: 8px; background-color: #fafaf7; color: #1a1a1a;">
+              <div style="text-align: center; margin-bottom: 25px; border-bottom: 2px solid #e5d5b0; padding-bottom: 20px;">
+                <h1 style="color: #b8960c; margin: 0; font-size: 26px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;">J Perfumewala</h1>
+                <p style="color: #666; font-size: 11px; margin: 5px 0 0 0; letter-spacing: 4px; text-transform: uppercase;">Luxury Fragrances</p>
+              </div>
+              <div style="padding: 10px 0;">
+                <h2 style="font-size: 18px; font-weight: 500; margin-top: 0; color: #333;">Verify Your Email Address</h2>
+                <p style="font-size: 14px; line-height: 1.6; color: #555;">Thank you for shopping with us. Please use the following One-Time Password (OTP) to complete your secure checkout:</p>
+                <div style="background-color: #ffffff; border: 1px solid #e3e3dc; padding: 20px; border-radius: 6px; text-align: center; margin: 25px 0;">
+                  <span style="font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #b8960c; padding-left: 8px;">${otp}</span>
+                </div>
+                <p style="font-size: 12px; color: #888; line-height: 1.5;">This code is valid for <strong>5 minutes</strong>. For security reasons, please do not share this code with anyone.</p>
+              </div>
+              <div style="text-align: center; margin-top: 30px; border-top: 1px solid #e5d5b0; padding-top: 20px; font-size: 11px; color: #999;">
+                <p style="margin: 0 0 5px 0;">If you did not request this code, you can safely ignore this email.</p>
+                <p style="margin: 0;">&copy; 2026 J Perfumewala Luxury Fragrances. All rights reserved.</p>
+              </div>
+            </div>
+          `,
+        });
+        console.log(`[OTP] ✅ Email sent via Brevo to ${email}`);
         emailSent = true;
       } catch (mailErr) {
-        console.error(`[OTP] ❌ Email FAILED for ${email}:`, mailErr.message);
+        console.error(`[OTP] ❌ Brevo send FAILED for ${email}:`, mailErr.message);
       }
     } else {
-      console.warn(`[OTP] ⚠️  Email NOT sent — email="${email}", EMAIL_USER set=${!!process.env.EMAIL_USER}, EMAIL_PASS set=${!!process.env.EMAIL_PASS}`);
+      console.warn(`[OTP] ⚠️  Brevo not configured — BREVO_API_KEY set=${!!process.env.BREVO_API_KEY}, email="${email}"`);
     }
 
-    // If email failed, return an error — NEVER expose the OTP in the response
+    // If email failed, return error — NEVER expose the OTP in the response
     if (!emailSent) {
       return res.status(503).json({
         success: false,
